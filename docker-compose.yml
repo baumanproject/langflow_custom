@@ -1,0 +1,56 @@
+services:
+  minio:
+    image: minio/minio:latest
+    env_file:
+      - ./services/minio/.env
+    command: server /data --console-address ":9001"
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    networks:
+      - platform
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: minio/mc:latest
+    env_file:
+      - ./services/minio/.env
+    volumes:
+      - ./services/minio/init/minio-init.sh:/minio-init.sh:ro
+      - ./images:/images:ro
+    entrypoint: ["/bin/sh", "/minio-init.sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - platform
+
+  langflow:
+    build:
+      context: ./services/langflow
+    command: ["langflow", "run", "--components-path", "/app/components"]
+    env_file:
+      - ./services/langflow/.env
+    ports:
+      - "7860:7860"
+    volumes:
+      - ./services/langflow/components:/app/components
+      - ./services/langflow/tests:/app/tests:ro
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    networks:
+      - platform
+
+networks:
+  platform:
+    driver: bridge
+
+volumes:
+  minio-data:
