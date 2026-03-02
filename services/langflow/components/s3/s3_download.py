@@ -1,24 +1,68 @@
 from __future__ import annotations
 
-import asyncio
 import base64
-import mimetypes
-import os
-import threading
-import tempfile
-from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from lfx.custom.custom_component.component import Component
-from lfx.io import BoolInput, DataInput, DropdownInput, Output, SecretStrInput, StrInput
 from lfx.schema import Data
+from lfx.io import Output, SecretStrInput, StrInput
 
 import aioboto3
+from pydantic import BaseModel
+
+try:
+    from lfx.io import MessageTextInput
+except Exception:  # pragma: no cover - fallback when MessageTextInput is not available
+    MessageTextInput = StrInput
+
+
+def _coerce_object_key_from_input(message_reference: Any) -> str:
+    if message_reference is None:
+        return ""
+
+    payload = message_reference.data if isinstance(message_reference, Data) else message_reference
+    if isinstance(payload, str):
+        key = payload.strip()
+        return key.lstrip("/")
+    if isinstance(payload, dict):
+        if "key" in payload and isinstance(payload["key"], str):
+            return str(payload["key"]).strip().lstrip("/")
+        if "s3_key" in payload and isinstance(payload["s3_key"], str):
+            return str(payload["s3_key"]).strip().lstrip("/")
+        if "path" in payload and isinstance(payload["path"], str):
+            return str(payload["path"]).strip().lstrip("/")
+        return ""
+
+    if hasattr(payload, "text") and isinstance(payload.text, str):
+        return payload.text.strip().lstrip("/")
+    if hasattr(payload, "content") and isinstance(payload.content, str):
+        return payload.content.strip().lstrip("/")
+    if hasattr(payload, "message") and isinstance(payload.message, str):
+        return payload.message.strip().lstrip("/")
+
+    key = getattr(payload, "key", None)
+    if key is None:
+        return ""
+    return str(key).strip().lstrip("/")
+
+
+class S3DownloadOutput(BaseModel):
+    bucket: str
+    key: str
+    base64: str
+    mime: str | None = None
+    size_bytes: int
+
+
+def _serialize_model(model: BaseModel) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
 
 
 class S3Download(Component):
     display_name = "S3 Download"
-    description = "Download object from S3/MinIO to base64 or temporary file."
+    description = "Download object from S3/MinIO as base64."
     icon = "download"
     name = "S3Download"
 
@@ -29,15 +73,11 @@ class S3Download(Component):
         SecretStrInput(name="session_token", display_name="Session Token", required=False, advanced=True),
         StrInput(name="region", display_name="Region", value="us-east-1", advanced=True),
         StrInput(name="bucket", display_name="Bucket", required=True),
-        StrInput(name="object_key", display_name="Object Key", required=True),
-        DropdownInput(
-            name="return_mode",
-            display_name="Return Mode",
-            value="temp_file",
-            options=["base64", "temp_file"],
+        MessageTextInput(
+            name="message_file_reference",
+            display_name="Message File Reference",
+            required=True,
         ),
-        StrInput(name="temp_dir", display_name="Temp Dir", required=False, advanced=True),
-        BoolInput(name="include_data_url", display_name="Include data_url", value=False, advanced=True),
     ]
 
     outputs = [
@@ -48,10 +88,27 @@ class S3Download(Component):
         )
     ]
 
-    def build(self) -> Data:
-        return self.download()
+    async def build(self) -> Data:
+        object_key = _coerce_object_key_from_input(self.message_file_reference)
+        if not object_key:
+            raise ValueError("message_file_reference is required")
+        result = await self._download_async(object_key=object_key)
 
-    async def _download_async(self) -> Dict[str, Any]:
+        payload = result["content"]
+        content_type = result["content_type"]
+        mime = content_type or None
+
+        record = S3DownloadOutput(
+            bucket=self.bucket,
+            key=object_key,
+            base64=base64.b64encode(payload).decode("utf-8"),
+            mime=mime,
+            size_bytes=len(payload),
+        )
+        self.status = f"Downloaded {len(payload)} bytes as base64"
+        return Data(data=_serialize_model(record))
+
+    async def _download_async(self, *, object_key: str) -> Dict[str, Any]:
         session_kwargs = {
             "aws_access_key_id": self.access_key,
             "aws_secret_access_key": self.secret_key,
@@ -62,69 +119,6 @@ class S3Download(Component):
 
         session = aioboto3.Session(**session_kwargs)
         async with session.client("s3", endpoint_url=self.endpoint_url) as s3:
-            response = await s3.get_object(Bucket=self.bucket, Key=self.object_key)
+            response = await s3.get_object(Bucket=self.bucket, Key=object_key)
             raw = await response["Body"].read()
-            headers = response.get("ResponseMetadata", {}).get("HTTPHeaders", {})
-            return {
-                "content": raw,
-                "content_type": headers.get("content-type"),
-            }
-
-    def _run_async(self, coro):
-        try:
-            return asyncio.run(coro)
-        except RuntimeError as exc:
-            if "already running" not in str(exc).lower():
-                raise
-
-            result: Dict[str, Any] = {}
-            error: Optional[BaseException] = None
-            done = threading.Event()
-
-            def runner() -> None:
-                nonlocal result, error
-                try:
-                    result["value"] = asyncio.run(coro)
-                except BaseException as e:  # noqa: BLE001
-                    error = e
-                finally:
-                    done.set()
-
-            thread = threading.Thread(target=runner, daemon=True)
-            thread.start()
-            done.wait()
-            if error:
-                raise error
-            return result.get("value")
-
-    def _parse_data_url(self, data: bytes, mime: str) -> str:
-        return f"data:{mime};base64,{base64.b64encode(data).decode('utf-8')}"
-
-    def download(self) -> Data:
-        result = self._run_async(self._download_async())
-        payload = result["content"]
-        mime = result.get("content_type") or mimetypes.guess_type(self.object_key)[0] or "application/octet-stream"
-        filename = Path(self.object_key).name
-
-        if self.return_mode == "base64":
-            record: Dict[str, Any] = {
-                "filename": filename,
-                "mime": mime,
-                "base64": base64.b64encode(payload).decode("utf-8"),
-            }
-            if self.include_data_url:
-                record["data_url"] = self._parse_data_url(payload, mime)
-            self.status = f"Downloaded {len(payload)} bytes as base64"
-            return Data(data=record)
-
-        if self.temp_dir:
-            Path(self.temp_dir).mkdir(parents=True, exist_ok=True)
-            fd, path = tempfile.mkstemp(suffix=Path(self.object_key).suffix, prefix=filename + "-", dir=self.temp_dir)
-        else:
-            fd, path = tempfile.mkstemp(suffix=Path(self.object_key).suffix, prefix=filename + "-")
-
-        with os.fdopen(fd, "wb") as f:
-            f.write(payload)
-
-        self.status = f"Downloaded {len(payload)} bytes to {path}"
-        return Data(data={"file_path": path, "filename": filename, "size_bytes": len(payload), "mime": mime})
+            return {"content": raw, "content_type": response.get("ContentType")}
