@@ -7,6 +7,38 @@ from lfx.custom.custom_component.component import Component
 from lfx.io import DataInput, Output
 from lfx.schema import Data
 
+from pydantic import BaseModel
+
+
+class DeleteLocalFilesInput(BaseModel):
+    file_path: str | None = None
+    file_paths: list[str] | None = None
+    paths: list[str] | None = None
+
+
+class DeleteLocalFilesOutput(BaseModel):
+    deleted: list[str]
+    errors: list[dict]
+
+
+def _coerce_input(value: Any) -> DeleteLocalFilesInput:
+    if isinstance(value, DeleteLocalFilesInput):
+        return value
+    payload = value.data if isinstance(value, Data) else value
+    if isinstance(payload, DeleteLocalFilesInput):
+        return payload
+    if not isinstance(payload, dict):
+        raise ValueError("files_data must be a dict or DeleteLocalFilesInput")
+    if hasattr(DeleteLocalFilesInput, "model_validate"):
+        return DeleteLocalFilesInput.model_validate(payload)
+    return DeleteLocalFilesInput.parse_obj(payload)
+
+
+def _serialize_model(model: BaseModel) -> Dict[str, Any]:
+    if hasattr(model, "model_dump"):
+        return model.model_dump(exclude_none=True)
+    return model.dict(exclude_none=True)
+
 
 class DeleteLocalFiles(Component):
     display_name = "Delete Local Files"
@@ -26,25 +58,17 @@ class DeleteLocalFiles(Component):
         return self.delete()
 
     def _coerce_paths(self) -> List[str]:
-        data = self.files_data
-        if isinstance(data, Data):
-            payload: Dict[str, Any] = data.data or {}
-        elif isinstance(data, dict):
-            payload = data
-        else:
-            raise ValueError("files_data must contain a Data or dict with file_path(s)")
-
+        payload = _coerce_input(self.files_data)
         paths: List[str] = []
-        explicit = payload.get("file_path") or payload.get("file_paths")
 
-        if explicit:
-            if isinstance(explicit, str):
-                paths.append(explicit)
-            elif isinstance(explicit, Iterable):
-                paths.extend([str(item) for item in explicit if str(item).strip()])
+        if payload.file_path:
+            paths.append(payload.file_path)
 
-        if payload.get("file_path") is None and payload.get("file_paths") is None and payload.get("paths"):
-            paths.extend([str(item) for item in payload.get("paths", []) if str(item).strip()])
+        if payload.file_paths:
+            paths.extend([str(item).strip() for item in payload.file_paths if str(item).strip()])
+
+        if payload.paths:
+            paths.extend([str(item).strip() for item in payload.paths if str(item).strip()])
 
         if not paths:
             raise ValueError("No file paths found")
@@ -65,4 +89,4 @@ class DeleteLocalFiles(Component):
         deleted = [entry["path"] for entry in result if entry["ok"]]
         errors = [entry for entry in result if not entry["ok"]]
         self.status = f"Deleted {len(deleted)} files, failed {len(errors)}"
-        return Data(data={"deleted": deleted, "errors": errors})
+        return Data(data=_serialize_model(DeleteLocalFilesOutput(deleted=deleted, errors=errors)))
