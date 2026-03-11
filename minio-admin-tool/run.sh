@@ -37,8 +37,13 @@ else
   echo "Remote mode: skipping local minio start; configuring ${MINIO_HOST}"
 fi
 
+DOCKER_COMPOSE_RUN_OPTS=""
+if [ "${MODE}" = "remote" ]; then
+  DOCKER_COMPOSE_RUN_OPTS="--no-deps"
+fi
+
 docker compose -f "${SCRIPT_DIR}/docker-compose.yml" \
-  run --rm \
+  run --rm ${DOCKER_COMPOSE_RUN_OPTS} \
   -v "${BOOTSTRAP_SCRIPT}:/tmp/bootstrap.sh:ro" \
   --entrypoint /bin/sh \
   mc -c "sh /tmp/bootstrap.sh"

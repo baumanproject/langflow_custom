@@ -24,9 +24,6 @@ services:
     volumes:
       - ./shared:/scripts:ro
     entrypoint: ["/bin/sh"]
-    depends_on:
-      minio:
-        condition: service_healthy
     networks:
       - minio_net
 
