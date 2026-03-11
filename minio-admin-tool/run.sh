@@ -2,7 +2,22 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BOOTSTRAP_SCRIPT="${1:-${SCRIPT_DIR}/shared/bootstrap-minio-user-bucket.sh}"
+MODE="${MC_MODE:-local}"
+if [ "${1-}" != "" ]; then
+  MODE="$1"
+fi
+BOOTSTRAP_SCRIPT="${2:-${SCRIPT_DIR}/shared/bootstrap-minio-user-bucket.sh}"
+
+case "${MODE}" in
+  local|remote)
+    ;;
+  *)
+    echo "Usage: bash run.sh [local|remote] [bootstrap_script]" >&2
+    echo "  local  - start local minio container from compose and configure it" >&2
+    echo "  remote - configure existing external minio from MINIO_HOST, do not touch local minio container" >&2
+    exit 1
+    ;;
+esac
 
 if [ ! -f "${BOOTSTRAP_SCRIPT}" ]; then
   echo "Bootstrap script not found: ${BOOTSTRAP_SCRIPT}" >&2
@@ -15,7 +30,13 @@ if [ ! -f "${SCRIPT_DIR}/.env" ]; then
 fi
 
 cd "${SCRIPT_DIR}"
-docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d minio
+
+if [ "${MODE}" = "local" ]; then
+  docker compose -f "${SCRIPT_DIR}/docker-compose.yml" up -d minio
+else
+  echo "Remote mode: skipping local minio start; configuring ${MINIO_HOST}"
+fi
+
 docker compose -f "${SCRIPT_DIR}/docker-compose.yml" \
   run --rm \
   -v "${BOOTSTRAP_SCRIPT}:/tmp/bootstrap.sh:ro" \
