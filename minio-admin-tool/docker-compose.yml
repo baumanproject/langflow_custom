@@ -1,0 +1,38 @@
+services:
+  minio:
+    image: ${MINIO_IMAGE:-minio/minio:RELEASE.2025-09-07T16-13-09Z}
+    env_file:
+      - .env
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MINIO_PUBLISHED_API_PORT:-9000}:9000"
+      - "${MINIO_PUBLISHED_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio-admin-data:/data
+    networks:
+      - minio_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mc:
+    image: ${MC_IMAGE:-minio/mc:latest}
+    env_file:
+      - .env
+    volumes:
+      - ./shared:/scripts:ro
+    entrypoint: ["/bin/sh"]
+    depends_on:
+      minio:
+        condition: service_healthy
+    networks:
+      - minio_net
+
+volumes:
+  minio-admin-data:
+
+networks:
+  minio_net:
+    driver: bridge
