@@ -18,7 +18,21 @@ MinIO Admin Tool
 
 2. Внешний MinIO (не поднимаем локальный контейнер):
 
-`MC_MODE=remote MINIO_HOST=http://<REMOTE_MINIO_HOST>:9000 MINIO_ROOT_USER=<ROOT_USER> MINIO_ROOT_PASSWORD=<ROOT_PASSWORD> MINIO_S3_USER=<S3_USER> MINIO_S3_PASSWORD=<S3_PASSWORD> bash /Users/hdp02/langflow_test/minio-admin-tool/run.sh`
+1) В `.env` задай параметры внешнего MinIO:
+- `MINIO_HOST=<REMOTE_MINIO_HOST>:9000`
+- `MINIO_ROOT_USER=<ROOT_USER>`
+- `MINIO_ROOT_PASSWORD=<ROOT_PASSWORD>`
+- `MINIO_S3_USER=<S3_USER>`
+- `MINIO_S3_PASSWORD=<S3_PASSWORD>`
+- `MC_MODE=remote`
+
+2) Запусти:
+
+`cd /Users/hdp02/langflow_test/minio-admin-tool && bash run.sh`
+
+Или просто вручную отредактируй `.env` и выполни:
+
+`cd /Users/hdp02/langflow_test/minio-admin-tool && MC_MODE=remote bash run.sh`
 
 Альтернативно можно передать режим аргументом:
 

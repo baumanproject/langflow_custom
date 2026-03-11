@@ -2,7 +2,7 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-MODE="${MC_MODE:-local}"
+MODE="${MC_MODE:-}"
 if [ "${1-}" != "" ]; then
   MODE="$1"
 fi
@@ -28,6 +28,11 @@ if [ ! -f "${SCRIPT_DIR}/.env" ]; then
   echo "Missing .env in ${SCRIPT_DIR}. Copy .env.example and fill values." >&2
   exit 1
 fi
+
+set -a
+. "${SCRIPT_DIR}/.env"
+set +a
+MODE="${MODE:-${MC_MODE:-local}}"
 
 cd "${SCRIPT_DIR}"
 
